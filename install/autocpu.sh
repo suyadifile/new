@@ -6,7 +6,7 @@ RED="\033[0;31m"
 COLOR1="$(cat /etc/rmbl/theme/$colornow | grep -w "TEXT" | cut -d: -f2|sed 's/ //g')"
 COLBG1="$(cat /etc/rmbl/theme/$colornow | grep -w "BG" | cut -d: -f2|sed 's/ //g')"
 WH='\033[1;37m'
-ipsaya=$(wget -qO- ifconfig.me)
+ipsaya=$(wget -qO- ipv4.icanhazip.com)
 data_server=$(curl -v --insecure --silent https://google.com/ 2>&1 | grep Date | sed -e 's/< Date: //')
 date_list=$(date +"%Y-%m-%d" -d "$data_server")
 data_ip="https://raw.githubusercontent.com/suyadifile/permission/main/ip"
@@ -33,7 +33,7 @@ fi
 }
 checking_sc
 cd
-ipsaya=$(wget -qO- ifconfig.me)
+ipsaya=$(wget -qO- ipv4.icanhazip.com)
 cd /etc
 nmap -p 22 $ipsaya > cekip
 cpu=$(grep -c -E "open" "cekip")
