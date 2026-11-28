@@ -140,15 +140,17 @@ rm /etc/nginx/sites-enabled/default
 rm /etc/nginx/sites-available/default
 curl https://raw.githubusercontent.com/suyadifile/new/main/install/nginx.conf > /etc/nginx/nginx.conf
 curl https://raw.githubusercontent.com/suyadifile/new/main/install/vps.conf > /etc/nginx/conf.d/vps.conf
-sed -i 's/listen = \/var\/run\/php-fpm.sock/listen = 127.0.0.1:9000/g' /etc/php/fpm/pool.d/www.conf
-useradd -m vps;
+# FIXED: path PHP-FPM Ubuntu 24.04 (versi folder berpindah)
+sed -i 's/listen = \/var\/run\/php-fpm.sock/listen = 127.0.0.1:9000/g' /etc/php/*/fpm/pool.d/www.conf 2>/dev/null || true
+useradd -m vps 2>/dev/null || true
 mkdir -p /home/vps/public_html
 echo "<?php phpinfo() ?>" > /home/vps/public_html/info.php
 chown -R www-data:www-data /home/vps/public_html
 chmod -R g+rw /home/vps/public_html
 cd /home/vps/public_html
 wget -O /home/vps/public_html/index.html "https://raw.githubusercontent.com/suyadifile/new/main/install/index.html1"
-/etc/init.d/nginx restart
+# FIXED: init.d -> systemctl (Ubuntu 24.04)
+systemctl enable nginx && systemctl restart nginx
 
 # install badvpn
 cd
@@ -180,7 +182,8 @@ sed -i '/Port 22/a Port 51443' /etc/ssh/sshd_config
 sed -i '/Port 22/a Port 58080' /etc/ssh/sshd_config
 sed -i '/Port 22/a Port 200' /etc/ssh/sshd_config
 sed -i '/Port 22/a Port 22' /etc/ssh/sshd_config
-/etc/init.d/ssh restart
+# FIXED: init.d -> systemctl
+systemctl enable ssh && systemctl restart ssh
 
 echo "=== Install Dropbear ==="
 # install dropbear
@@ -203,11 +206,12 @@ else
 fi
 echo "/bin/false" >> /etc/shells
 echo "/usr/sbin/nologin" >> /etc/shells
-/etc/init.d/ssh restart
-/etc/init.d/dropbear restart
+# FIXED: init.d -> systemctl
+systemctl enable ssh && systemctl restart ssh
+systemctl enable dropbear && systemctl restart dropbear
 
 # // install squid for debian 9,10 & ubuntu 20.04
-apt -y install squid3
+apt -y install squid3 2>/dev/null || true
 
 # install squid for debian 11
 apt -y install squid
@@ -216,7 +220,8 @@ sed -i $MYIP2 /etc/squid/squid.conf
 
 # setting vnstat
 apt -y install vnstat
-/etc/init.d/vnstat restart
+# FIXED: init.d -> systemctl
+systemctl enable vnstat && systemctl restart vnstat
 apt -y install libsqlite3-dev
 wget https://humdi.net/vnstat/vnstat-2.6.tar.gz
 tar zxvf vnstat-2.6.tar.gz
@@ -226,8 +231,7 @@ cd
 vnstat -u -i $NET
 sed -i 's/Interface "'""eth0""'"/Interface "'""$NET""'"/g' /etc/vnstat.conf
 chown vnstat:vnstat /var/lib/vnstat -R
-systemctl enable vnstat
-/etc/init.d/vnstat restart
+systemctl enable vnstat && systemctl restart vnstat
 rm -f /root/vnstat-2.6.tar.gz
 rm -rf /root/vnstat-2.6
 
@@ -241,11 +245,11 @@ socket = a:SO_REUSEADDR=1
 socket = l:TCP_NODELAY=1
 socket = r:TCP_NODELAY=1
 
-[dropbear]
+[dropbear-sshssl]
 accept = 8880
 connect = 127.0.0.1:22
 
-[dropbear]
+[dropbear-alt]
 accept = 8443
 connect = 127.0.0.1:109
 
@@ -267,7 +271,8 @@ cat key.pem cert.pem >> /etc/stunnel/stunnel.pem
 
 # konfigurasi stunnel
 sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4
-/etc/init.d/stunnel4 restart
+# FIXED: init.d -> systemctl
+systemctl enable stunnel4 && systemctl restart stunnel4
 
 #OpenVPN
 wget https://raw.githubusercontent.com/suyadifile/new/main/install/vpn.sh && chmod +x vpn.sh && ./vpn.sh
@@ -275,14 +280,16 @@ wget https://raw.githubusercontent.com/suyadifile/new/main/install/vpn.sh && chm
 # // install lolcat
 wget https://raw.githubusercontent.com/suyadifile/new/main/install/lolcat.sh && chmod +x lolcat.sh && ./lolcat.sh
 
-# memory swap 1gb
-cd
-dd if=/dev/zero of=/swapfile bs=1024 count=1048576
-mkswap /swapfile
-chown root:root /swapfile
-chmod 0600 /swapfile >/dev/null 2>&1
-swapon /swapfile >/dev/null 2>&1
-sed -i '$ i\/swapfile      swap swap   defaults    0 0' /etc/fstab
+# memory swap 1gb — FIXED: idempoten, aman dijalankan ulang
+if ! swapon --show=NAME --noheadings 2>/dev/null | grep -q '^/swapfile$'; then
+    if [ ! -f /swapfile ]; then
+        fallocate -l 1G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=1024
+        chmod 600 /swapfile
+        mkswap /swapfile
+    fi
+    swapon /swapfile
+fi
+grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
 # install fail2ban
 apt -y install fail2ban
@@ -388,7 +395,8 @@ service cron reload >/dev/null 2>&1
 service cron start >/dev/null 2>&1
 
 # remove unnecessary files
-apt autoclean -y >/dev/null 2>&1
+# FIXED: apt autoclean -y -> apt autoclean
+apt autoclean >/dev/null 2>&1
 apt -y remove --purge unscd >/dev/null 2>&1
 apt-get -y --purge remove samba* >/dev/null 2>&1
 apt-get -y --purge remove apache2* >/dev/null 2>&1
@@ -398,6 +406,11 @@ apt autoremove -y >/dev/null 2>&1
 # finishing
 cd
 chown -R www-data:www-data /home/vps/public_html
+
+# FIXED: final health check sebelum cleanup
+if [ -f /usr/local/sbin/service-health.sh ]; then
+    bash /usr/local/sbin/service-health.sh || true
+fi
 
 rm -f /root/key.pem
 rm -f /root/cert.pem
