@@ -9,6 +9,9 @@ BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 LIGHT='\033[0;37m'
+# FIXED: alias lowercase supaya $green / $yell tidak kosong
+green=$GREEN
+yell=$ORANGE
 # ==========================================
 # Getting
 
@@ -17,6 +20,11 @@ echo -e "
 date
 echo ""
 cd
+# FIXED: pastikan www-data ada sebelum xray/nginx dipakai
+if ! id www-data >/dev/null 2>&1; then
+    groupadd -r www-data 2>/dev/null || true
+    useradd -r -g www-data -d /var/www -s /usr/sbin/nologin www-data 2>/dev/null || true
+fi
 if [[ -e /etc/xray/domain ]]; then
 domain=$(cat /etc/xray/domain)
 else
@@ -44,7 +52,8 @@ echo -e "[ ${green}INFO$NC ] Setting chrony tracking"
 chronyc sourcestats -v
 chronyc tracking -v
 echo -e "[ ${green}INFO$NC ] Setting dll"
-apt clean all && apt update
+# FIXED: apt clean all -> apt clean
+apt clean && apt update
 apt install curl socat xz-utils wget apt-transport-https gnupg gnupg2 gnupg1 dnsutils lsb-release -y
 apt install socat cron bash-completion ntpdate -y
 ntpdate pool.ntp.org
@@ -70,8 +79,6 @@ touch /var/log/xray/access.log
 touch /var/log/xray/error.log
 touch /var/log/xray/access2.log
 touch /var/log/xray/error2.log
-# / / Ambil Xray Core Version Terbaru
-#latest_version="$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases | grep tag_name | sed -E 's/.*"v(.*)".*/\1/' | head -n 1)"
 curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh -o /tmp/xray-install.sh || { echo "GAGAL mengunduh installer Xray"; exit 1; }
 bash /tmp/xray-install.sh install -u www-data || { echo "GAGAL memasang Xray Core"; exit 1; }
 rm -f /tmp/xray-install.sh
@@ -589,7 +596,7 @@ sed -i '$ iproxy_redirect off;' /etc/nginx/conf.d/xray.conf
 sed -i '$ igrpc_set_header X-Real-IP \$remote_addr;' /etc/nginx/conf.d/xray.conf
 sed -i '$ igrpc_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;' /etc/nginx/conf.d/xray.conf
 sed -i '$ igrpc_set_header Host \$http_host;' /etc/nginx/conf.d/xray.conf
-sed -i '$ igrpc_pass grpc://127.0.0.1:15018;' /etc/nginx/conf.d/xray.conf
+sed -i '$ igrpc_pass grpc://127.0.0.1:24456;' /etc/nginx/conf.d/xray.conf
 sed -i '$ i}' /etc/nginx/conf.d/xray.conf
 
 sed -i '$ ilocation ^~ /vmess-grpc' /etc/nginx/conf.d/xray.conf
@@ -598,7 +605,7 @@ sed -i '$ iproxy_redirect off;' /etc/nginx/conf.d/xray.conf
 sed -i '$ igrpc_set_header X-Real-IP \$remote_addr;' /etc/nginx/conf.d/xray.conf
 sed -i '$ igrpc_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;' /etc/nginx/conf.d/xray.conf
 sed -i '$ igrpc_set_header Host \$http_host;' /etc/nginx/conf.d/xray.conf
-sed -i '$ igrpc_pass grpc://127.0.0.1:23458;' /etc/nginx/conf.d/xray.conf
+sed -i '$ igrpc_pass grpc://127.0.0.1:31234;' /etc/nginx/conf.d/xray.conf
 sed -i '$ i}' /etc/nginx/conf.d/xray.conf
 
 sed -i '$ ilocation ^~ /trojan-grpc' /etc/nginx/conf.d/xray.conf
@@ -607,7 +614,7 @@ sed -i '$ iproxy_redirect off;' /etc/nginx/conf.d/xray.conf
 sed -i '$ igrpc_set_header X-Real-IP \$remote_addr;' /etc/nginx/conf.d/xray.conf
 sed -i '$ igrpc_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;' /etc/nginx/conf.d/xray.conf
 sed -i '$ igrpc_set_header Host \$http_host;' /etc/nginx/conf.d/xray.conf
-sed -i '$ igrpc_pass grpc://127.0.0.1:25434;' /etc/nginx/conf.d/xray.conf
+sed -i '$ igrpc_pass grpc://127.0.0.1:33456;' /etc/nginx/conf.d/xray.conf
 sed -i '$ i}' /etc/nginx/conf.d/xray.conf
 
 sed -i '$ ilocation ^~ /ss-grpc' /etc/nginx/conf.d/xray.conf
@@ -627,22 +634,41 @@ systemctl daemon-reload
 /usr/local/bin/xray run -test -config /etc/xray/config.json || { echo "Konfigurasi Xray tidak valid; layanan tidak dijalankan"; exit 1; }
 systemctl enable xray
 systemctl restart xray
+sleep 1
+if ! systemctl is-active --quiet xray; then
+    echo "Xray gagal aktif. Log 30 baris terakhir:"
+    journalctl -u xray -n 30 --no-pager
+    exit 1
+fi
+# runn hanya untuk chown /var/run/xray (one-shot), bukan service persisten
 systemctl enable runn
-systemctl restart runn
-nginx -t || { echo "Konfigurasi Nginx tidak valid; Nginx tidak dijalankan"; exit 1; }
-systemctl enable nginx
-systemctl restart nginx
-systemctl is-active --quiet xray || { echo "Xray gagal aktif"; systemctl status xray --no-pager -l; exit 1; }
-systemctl is-active --quiet nginx || { echo "Nginx gagal aktif"; systemctl status nginx --no-pager -l; exit 1; }
+systemctl restart runn || true
+
+# FIXED: nginx hanya diverifikasi jika terinstall
+if command -v nginx >/dev/null 2>&1; then
+    nginx -t || { echo "Konfigurasi Nginx tidak valid; Nginx tidak dijalankan"; exit 1; }
+    systemctl enable nginx
+    systemctl restart nginx
+    sleep 1
+    systemctl is-active --quiet nginx || { echo "Nginx gagal aktif"; systemctl status nginx --no-pager -l; exit 1; }
+else
+    echo "[WARN] nginx belum terinstall; jalankan ssh-vpn.sh dulu"
+fi
 
 sleep 0.5
 yellow() { echo -e "\\033[33;1m${*}\\033[0m"; }
 yellow "xray/Vmess"
 yellow "xray/Vless"
 
-mv /root/domain /etc/xray/
+mv /root/domain /etc/xray/ 2>/dev/null || true
 if [ -f /root/scdomain ];then
 rm /root/scdomain > /dev/null 2>&1
 fi
+
+# FIXED: final health check sebelum keluar
+if [ -f /usr/local/sbin/service-health.sh ]; then
+    bash /usr/local/sbin/service-health.sh || true
+fi
+
 clear
 rm -f ins-xray.sh
