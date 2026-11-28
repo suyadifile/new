@@ -1,0 +1,18 @@
+SUYADI VPN - Ubuntu 24.04 compatibility patch
+
+Files changed:
+- install/ins-xray.sh
+  * Removes shell-style #protocol markers from the generated JSON template.
+  * Installs Xray Core through the official XTLS installer and checks that the binary exists.
+  * Uses the official acme.sh source, checks certificate issuance/install results, and validates the PEM certificate before continuing.
+  * Writes a valid systemd xray.service unit, validates config with xray run -test, and enables/starts xray and nginx with checks.
+- install/ssh-vpn.sh
+  * Configures Dropbear defaults robustly even when Ubuntu ships commented DROPBEAR_PORT/NO_START settings.
+  * Keeps OpenSSH on port 22 and configures Dropbear on port 143 plus the existing extra ports.
+
+The bootstrap setup.sh was not modified. It downloads install/ssh-vpn.sh and install/ins-xray.sh from the repository's main branch, so uploading these changed files to GitHub is sufficient for future installs to fetch them.
+
+The permission and license repositories/files were not modified.
+
+IMPORTANT TEST LIMITATION:
+Static checks passed (Bash syntax and generated JSON parsing). This archive has NOT yet been tested end-to-end on a fresh VPS. ACME issuance requires the domain to resolve to the VPS and inbound TCP port 80 to be reachable. Verify the full install on a disposable VPS before production use.
