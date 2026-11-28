@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Small HTTP-header TCP bridge used by the SUYADI VPN SSH/OVPN WS services."""
+import argparse
+import base64
+import hashlib
+import select
+import socket
+import threading
+import time
+
+BIND_ADDRESS = "0.0.0.0"
+DEFAULT_HOST = "127.0.0.1:88"
+PASSWORD = ""
+BUFFER_SIZE = 16384
+IDLE_TIMEOUT = 60
+
+
+def parse_host_port(value):
+    value = value.strip()
+    if not value:
+        raise ValueError("empty X-Real-Host")
+    if value.startswith("[") and "]" in value:
+        host, _, rest = value[1:].partition("]")
+        port = rest[1:] if rest.startswith(":") else "443"
+    elif ":" in value:
+        host, port = value.rsplit(":", 1)
+    else:
+        host, port = value, "443"
+    port = int(port)
+    if not 1 <= port <= 65535:
+        raise ValueError("invalid destination port")
+    return host, port
+
+
+class ClientThread(threading.Thread):
+    def __init__(self, client, address):
+        super().__init__(daemon=True)
+        self.client = client
+        self.address = address
+        self.target = None
+
+    def close_all(self):
+        for sock in (self.client, self.target):
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+    def run(self):
+        try:
+            self.client.settimeout(10)
+            request = bytearray()
+            while b"\r\n\r\n" not in request and len(request) < BUFFER_SIZE:
+                chunk = self.client.recv(4096)
+                if not chunk:
+                    return
+                request.extend(chunk)
+            if b"\r\n\r\n" not in request:
+                self.client.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+                return
+
+            header_bytes, pending = bytes(request).split(b"\r\n\r\n", 1)
+            headers = {}
+            for line in header_bytes.split(b"\r\n")[1:]:
+                if b":" in line:
+                    key, value = line.split(b":", 1)
+                    headers[key.decode("latin-1").strip().lower()] = value.decode("latin-1").strip()
+
+            destination = headers.get("x-real-host", DEFAULT_HOST)
+            supplied_password = headers.get("x-pass", "")
+            if PASSWORD and supplied_password != PASSWORD:
+                self.client.sendall(b"HTTP/1.1 400 WrongPass!\r\nConnection: close\r\n\r\n")
+                return
+
+            host, port = parse_host_port(destination)
+            if not PASSWORD and host.lower() not in ("127.0.0.1", "localhost", "::1"):
+                self.client.sendall(b"HTTP/1.1 403 Forbidden!\r\nConnection: close\r\n\r\n")
+                return
+
+            self.target = socket.create_connection((host, port), timeout=10)
+            self.target.setblocking(False)
+            self.client.setblocking(False)
+            response = (
+                b"HTTP/1.1 101 Switching Protocols\r\n"
+                b"Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            )
+            websocket_key = headers.get("sec-websocket-key")
+            if websocket_key:
+                accept = base64.b64encode(
+                    hashlib.sha1((websocket_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+                )
+                response += b"Sec-WebSocket-Accept: " + accept + b"\r\n"
+            self.client.sendall(response + b"\r\n")
+            if pending:
+                self.target.sendall(pending)
+
+            last_activity = time.monotonic()
+            sockets = [self.client, self.target]
+            while True:
+                readable, _, exceptional = select.select(sockets, [], sockets, 3)
+                if exceptional:
+                    break
+                if not readable:
+                    if time.monotonic() - last_activity > IDLE_TIMEOUT:
+                        break
+                    continue
+                for source in readable:
+                    data = source.recv(BUFFER_SIZE)
+                    if not data:
+                        return
+                    destination_socket = self.target if source is self.client else self.client
+                    destination_socket.sendall(data)
+                    last_activity = time.monotonic()
+        except (OSError, ValueError, TimeoutError) as exc:
+            print(f"[{self.address}] proxy error: {exc}", flush=True)
+        finally:
+            self.close_all()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="SUYADI VPN WebSocket TCP bridge")
+    parser.add_argument("port", nargs="?", type=int, default=700)
+    args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error("port must be between 1 and 65535")
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((BIND_ADDRESS, args.port))
+    server.listen(128)
+    print(f"WebSocket bridge listening on {BIND_ADDRESS}:{args.port}; target default {DEFAULT_HOST}", flush=True)
+    try:
+        while True:
+            client, address = server.accept()
+            ClientThread(client, address).start()
+    except KeyboardInterrupt:
+        print("Stopping WebSocket bridge", flush=True)
+    finally:
+        server.close()
+
+
+if __name__ == "__main__":
+    main()
